@@ -1,0 +1,91 @@
+---
+# This playbook is for setting up a new node for OpenShift 3.5
+
+- hosts: all
+  remote_user: ec2-user
+# If ansible_ssh_user is not root, ansible_sudo must be set to true
+  sudo: true
+#  become: yes
+  tasks:
+  
+  - name: Force unregister before register
+    redhat_subscription:
+      state: absent
+    ignore_errors: true
+  
+  - name: red hat subscription manager register and consume
+    command: subscription-manager register --username=name --password=password
+  
+  - name: attach node to subscription pool
+    command: subscription-manager attach --pool=poolid
+  
+  - name: disable all repos
+    command: subscription-manager repos --disable="*"
+
+  - name: refresh repos
+    command: subscription-manager refresh
+  
+  - name: enable repo rhel-7-server-rpms
+    command: subscription-manager repos --enable="rhel-7-server-rpms"
+  
+  - name: enable repo rhel-7-server-extras-rpms
+    command: subscription-manager repos --enable="rhel-7-server-extras-rpms"
+  
+  - name: enable repo rhel-7-server-ose-3.7-rpms
+    command: subscription-manager repos --enable="rhel-7-server-ose-3.7-rpms"
+  
+  - name: enable repo rhel-7-fast-datapath-rpms
+    command: subscription-manager repos --enable="rhel-7-fast-datapath-rpms"
+  
+  - name: install basic packages
+    yum: name="{{ item }}" state=present
+    with_items:
+      - wget
+      - git
+      - net-tools
+      - bind-utils
+      - iptables-services
+      - bridge-utils
+      - bash-completion
+      - kexec-tools
+      - sos
+      - psacct
+      - atomic-openshift-utils
+      - atomic-openshift-excluder
+      - atomic-openshift-docker-excluder
+  
+  - name: update all packages
+    yum: name='*' state=latest
+  
+  - name: unexclude host
+    command: atomic-openshift-excluder unexclude
+  
+  - name: install docker
+    yum: name=docker state=present
+
+  - name: allow insecure docker registry
+    command: sed -i '/OPTIONS=.*/c\OPTIONS="--selinux-enabled --insecure-registry 172.30.0.0/16"' /etc/sysconfig/docker
+  
+  - parted:
+      device: /dev/xvdb
+      number: 1
+      flags: lvm
+#     label: gpt
+      state: present
+      part_start: 1GB
+      part_end: 50GB
+      part_type: primary
+
+  - name: create docker volume group
+    command: vgcreate docker_vol /dev/xvdb1
+  
+  - name: generate docker-storage-setup config
+    lineinfile:
+      path: /etc/sysconfig/docker-storage-setup
+      line: 'VG=docker_vol'
+  
+  - name: run docker-storage-setup
+    command: docker-storage-setup
+  
+  - name: start and enable docker
+    service: name=docker state=started enabled=yes
